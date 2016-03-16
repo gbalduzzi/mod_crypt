@@ -18,7 +18,6 @@ static int crypt_handler(request_rec *r)
 
      /* Figure out which file is being requested by removing the .sum from it */
      filename = apr_pstrdup(r->pool, r->filename);
-     //filename[strlen(filename)-3] = 0; /* Cut off the last 4 characters. */
 
      /* Try to load the file: return 404 if not possible */
      rc = apr_stat(&finfo, filename, APR_FINFO_MIN, r->pool);

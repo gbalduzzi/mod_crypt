@@ -1,0 +1,4 @@
+.libs
+mod_crypt.lo
+mod_crypt.la
+mod_crypt.slo
