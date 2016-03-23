@@ -2,8 +2,11 @@
 #include "http_config.h"
 #include "http_protocol.h"
 #include "ap_config.h"
+#include "apr_strings.h"
+#include "util_script.h"
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 
 static int crypt_handler(request_rec *r)
@@ -39,24 +42,35 @@ static int crypt_handler(request_rec *r)
      if (!user_id) user_id = "0";
 
     /*
-     * now let's handle the request
+     * LOG some data
     */
-    ap_set_content_type(r, "text/html");
-    ap_rprintf(r, "Hello World!<br>");
+    ap_set_content_type(r, "application/octet-stream");
+    /* LOG SOME DATA */
+    /*
     ap_rprintf(r, "Your user was: %s", user_id);
-
-    /* Build the command to AES crypt the requested file */
     ap_rprintf(r, "<br>Your filename request was: %s", r->filename);
     ap_rprintf(r, "<br>Your crypted file is: %s.crypt", r->filename);
+    */
 
+    /* Build the command to AES crypt the requested file */
     char *command;
     size_t sz;
-    sz = snprintf(NULL, 0, "openssl aes-256-cbc -a -salt -in %s -out %s -pass pass:0123456789", r->filename, r->filename);
+    sz = snprintf(NULL, 0, "openssl aes-256-cbc -a -salt -in %s -pass pass:0123456789", r->filename);
     command = (char *)malloc(sz++); /* make sure you check for != NULL in real code */
-    snprintf(command, sz, "openssl aes-256-cbc -a -salt -in %s -out %s.crypt -pass pass:0123456789", r->filename, r->filename);
+    snprintf(command, sz, "openssl aes-256-cbc -a -salt -in %s -pass pass:0123456789", r->filename);
 
-    ap_rprintf(r, "<br>Command is: %s", command);
-    system(command);
+    FILE *fp;
+    char path[1035];
+
+    /* Open the command for reading. */
+    fp = popen(command, "r");
+    /* Read the output a line at a time - output it. */
+    while (fgets(path, sizeof(path)-1, fp) != NULL) {
+        ap_rprintf(r, "%s", path);
+    }
+
+    /* close */
+    pclose(fp);
 
     /* Lastly, we must tell the server that we took care of this request and everything went fine.
      * We do so by simply returning the value OK to the server.
