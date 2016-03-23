@@ -2,6 +2,9 @@
 #include "http_config.h"
 #include "http_protocol.h"
 #include "ap_config.h"
+#include <unistd.h>
+#include <stdlib.h>
+
 
 static int crypt_handler(request_rec *r)
 {
@@ -14,9 +17,6 @@ static int crypt_handler(request_rec *r)
      apr_finfo_t finfo;
      apr_file_t *file;
      char *filename;
-
-
-     /* Figure out which file is being requested by removing the .sum from it */
      filename = apr_pstrdup(r->pool, r->filename);
 
      /* Try to load the file: return 404 if not possible */
@@ -44,7 +44,19 @@ static int crypt_handler(request_rec *r)
     ap_set_content_type(r, "text/html");
     ap_rprintf(r, "Hello World!<br>");
     ap_rprintf(r, "Your user was: %s", user_id);
+
+    /* Build the command to AES crypt the requested file */
     ap_rprintf(r, "<br>Your filename request was: %s", r->filename);
+    ap_rprintf(r, "<br>Your crypted file is: %s.crypt", r->filename);
+
+    char *command;
+    size_t sz;
+    sz = snprintf(NULL, 0, "openssl aes-256-cbc -a -salt -in %s -out %s -pass pass:0123456789", r->filename, r->filename);
+    command = (char *)malloc(sz++); /* make sure you check for != NULL in real code */
+    snprintf(command, sz, "openssl aes-256-cbc -a -salt -in %s -out %s.crypt -pass pass:0123456789", r->filename, r->filename);
+
+    ap_rprintf(r, "<br>Command is: %s", command);
+    system(command);
 
     /* Lastly, we must tell the server that we took care of this request and everything went fine.
      * We do so by simply returning the value OK to the server.
