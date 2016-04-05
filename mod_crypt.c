@@ -7,7 +7,10 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdbool.h>
+#include <string.h>
 
+bool debug = true;
 
 static int crypt_handler(request_rec *r)
 {
@@ -32,25 +35,13 @@ static int crypt_handler(request_rec *r)
         );
         if (!exists) return HTTP_NOT_FOUND; /* Return a 404 if not found. */
      }
-     /* If apr_stat failed, we're probably not allowed to check this file. */
      else return HTTP_NOT_FOUND;
 
-     /* get data for user from GET param and set 0 if not provided */
+     /* get data for user from GET param and set -1 if not provided */
      apr_table_t*GET;
      ap_args_to_table(r, &GET);
      const char *user_id = apr_table_get(GET, "user");
-     if (!user_id) user_id = "0";
-
-    /*
-     * LOG some data
-    */
-    ap_set_content_type(r, "application/octet-stream");
-    /* LOG SOME DATA */
-    /*
-    ap_rprintf(r, "Your user was: %s", user_id);
-    ap_rprintf(r, "<br>Your filename request was: %s", r->filename);
-    ap_rprintf(r, "<br>Your crypted file is: %s.crypt", r->filename);
-    */
+     if (!user_id) user_id = "-1";
 
     /* Build the command to AES crypt the requested file */
     char *command;
@@ -58,6 +49,52 @@ static int crypt_handler(request_rec *r)
     sz = snprintf(NULL, 0, "openssl aes-256-cbc -a -salt -in %s -pass pass:0123456789", r->filename);
     command = (char *)malloc(sz++); /* make sure you check for != NULL in real code */
     snprintf(command, sz, "openssl aes-256-cbc -a -salt -in %s -pass pass:0123456789", r->filename);
+
+    if (debug) {
+        ap_set_content_type(r, "text/plain");
+        ap_rprintf(r, "Your user was: %s\n", user_id);
+        ap_rprintf(r, "Requested file:%s\n", r->filename);
+    } else {
+        ap_set_content_type(r, "application/octet-stream");
+    }
+
+    /* Open ACL file */
+
+    FILE* stream = fopen("/srv/http/cryptoApache/acl.csv", "r");
+    char line[1024];
+    int count = 0;
+    bool auth = false;
+    while (fgets(line, 1024, stream))
+    {
+        if (count++ == 0) {
+            /* First row is csv header */
+            continue;
+        }
+
+       const char* tmp = strtok(line,";");
+
+       if (strcmp(tmp, r->filename) == 0) {
+           tmp = strtok(NULL, ";");
+           const char* user = strtok(strdup(tmp),",");
+           while (user != NULL) {
+               if (strcmp(user,user_id) == 0) {
+                   auth = true;
+                   break;
+               }
+               user = strtok(NULL,",");
+           }
+       }
+
+       count++;
+
+    }
+
+    /* Send 403 if not authorised */
+    if (!auth) {
+        return HTTP_FORBIDDEN;
+    }
+
+    /* Otherwise send crypted data */
 
     FILE *fp;
     char path[1035];
