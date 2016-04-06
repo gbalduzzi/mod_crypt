@@ -9,8 +9,10 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <string.h>
+#include <ctype.h>
 
 bool debug = true;
+const char *rootPath;
 
 static int crypt_handler(request_rec *r)
 {
@@ -58,6 +60,7 @@ static int crypt_handler(request_rec *r)
         ap_set_content_type(r, "application/octet-stream");
     }
 
+
     /* Open ACL file */
 
     FILE* stream = fopen("/srv/http/cryptoApache/acl.csv", "r");
@@ -72,21 +75,27 @@ static int crypt_handler(request_rec *r)
         }
 
        const char* tmp = strtok(line,";");
-
-       if (strcmp(tmp, r->filename) == 0) {
+       char *completePath = strcat(apr_pstrdup(r->pool, rootPath),tmp);
+       if (strcmp(completePath, r->filename) == 0) {
            tmp = strtok(NULL, ";");
            const char* user = strtok(strdup(tmp),",");
+
+           /* If no user is provided, all users are accepted */
+           if (user != NULL && strcmp(user,"all") == 0) {
+               auth = true;
+               break;
+           }
+
            while (user != NULL) {
                if (strcmp(user,user_id) == 0) {
                    auth = true;
                    break;
                }
+
                user = strtok(NULL,",");
            }
        }
-
        count++;
-
     }
 
     /* Send 403 if not authorised */
@@ -117,9 +126,24 @@ static int crypt_handler(request_rec *r)
 
 static void register_hooks(apr_pool_t *pool)
 {
+    rootPath = "/";
     /* Create a hook in the request handler, so we get called when a request arrives */
     ap_hook_handler(crypt_handler, NULL, NULL, APR_HOOK_LAST);
 }
+
+/* Handler for the "rootPath" directive */
+const char *set_request_root(cmd_parms *cmd, void *cfg, const char *arg)
+{
+    rootPath = arg;
+    return NULL;
+}
+
+static const command_rec  crypt_directives[] =
+{
+    AP_INIT_TAKE1("CryptRootPath", set_request_root, NULL, RSRC_CONF, "Set the root of our crypted folder"),
+    { NULL }
+};
+
 
 module AP_MODULE_DECLARE_DATA   crypt_module =
 {
@@ -128,6 +152,6 @@ module AP_MODULE_DECLARE_DATA   crypt_module =
     NULL,
     NULL,
     NULL,
-    NULL,
+    crypt_directives,
     register_hooks   /* Our hook registering function */
 };
