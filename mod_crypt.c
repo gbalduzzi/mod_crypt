@@ -15,6 +15,7 @@
 bool debug = true;
 const char *rootPath;
 const char *aclFilePath;
+const char *keysFilePath;
 
 static int crypt_handler(request_rec *r)
 {
@@ -49,27 +50,24 @@ static int crypt_handler(request_rec *r)
 
     if (debug) {
         ap_set_content_type(r, "text/plain");
-        ap_rprintf(r, "Your user was: %s\n", user_id);
-        ap_rprintf(r, "Requested file:%s\n", r->filename);
     } else {
         ap_set_content_type(r, "application/octet-stream");
     }
 
 
     /* Open ACL file */
-
-    FILE* stream = fopen(aclFilePath, "r");
-    char line[1024];
+    FILE* aclStream = fopen(aclFilePath, "r");
+    char lineAcl[1024];
     int count = 0;
     bool auth = false;
-    while (fgets(line, 1024, stream))
+    while (fgets(lineAcl, 1024, aclStream))
     {
         if (count++ == 0) {
             /* First row is csv header */
             continue;
         }
 
-       const char* tmp = strtok(line,";");
+       const char* tmp = strtok(lineAcl,";");
        char *completePath = strcat(apr_pstrdup(r->pool, rootPath),tmp);
        if (strcmp(completePath, r->filename) == 0) {
            tmp = strtok(NULL, ";");
@@ -95,21 +93,43 @@ static int crypt_handler(request_rec *r)
 
     /* Send 403 if not authorised */
     if (!auth) {
-        if (!debug) {
-            return HTTP_FORBIDDEN;
-        } else {
-            ap_rprintf(r, "ACCESS FORBIDDEN\n");
-        }
+        return HTTP_FORBIDDEN;
     }
 
     /* Otherwise send crypted data */
 
+    /* Get user personal key from keys.csv */
+    FILE* streamKeys = fopen(keysFilePath, "r");
+    char lineKeys[1024];
+    char *userKey = "";
+    count = 0;
+    while (fgets(lineKeys, 1024, streamKeys))
+    {
+        if (count++ == 0) {
+            /* First row is csv header */
+            continue;
+        }
+
+       const char* field = strtok(lineKeys,";");
+       if (strcmp(field, user_id) == 0) {
+           /* I found the correct key for my user */
+            field = strtok(NULL, ";");
+            userKey = strdup(field);
+       }
+    }
+
+    if (strcmp("",userKey) == 0) {
+        /* User not in the list */
+        return HTTP_FORBIDDEN;
+    }
+
     /* Build the command to AES crypt the requested file */
     char *command;
     size_t sz;
-    sz = snprintf(NULL, 0, "openssl aes-256-cbc -a -salt -in %s -pass pass:0123456789", r->filename);
+    sz = snprintf(NULL, 0, "openssl aes-256-cbc -a -salt -in %s -pass pass:%s", r->filename, userKey);
     command = (char *)malloc(sz++); /* make sure you check for != NULL in real code */
-    snprintf(command, sz, "openssl aes-256-cbc -a -salt -in %s -pass pass:0123456789", r->filename);
+    snprintf(command, sz, "openssl aes-256-cbc -a -salt -in %s -pass pass:%s", r->filename, userKey);
+    ap_rprintf(r, "Command: %s \n", command);
 
     FILE *fp;
     char path[1035];
@@ -134,6 +154,7 @@ static void register_hooks(apr_pool_t *pool)
 {
     rootPath = "/";
     aclFilePath = "acl.csv";
+    keysFilePath = "keys.csv";
     /* Create a hook in the request handler, so we get called when a request arrives */
     ap_hook_handler(crypt_handler, NULL, NULL, APR_HOOK_LAST);
 }
@@ -152,10 +173,18 @@ const char *set_acl_file_path(cmd_parms *cmd, void *cfg, const char *arg)
     return NULL;
 }
 
+/* Handler for the "keysFIle" directive */
+const char *set_keys_file_path(cmd_parms *cmd, void *cfg, const char *arg)
+{
+    keysFilePath = arg;
+    return NULL;
+}
+
 static const command_rec  crypt_directives[] =
 {
     AP_INIT_TAKE1("CryptRootPath", set_request_root, NULL, RSRC_CONF, "Set the root of our crypted folder"),
     AP_INIT_TAKE1("CryptAclFile", set_acl_file_path, NULL, RSRC_CONF, "Set the location of ACL csv file"),
+    AP_INIT_TAKE1("CryptKeysFile", set_keys_file_path, NULL, RSRC_CONF, "Set the location of Keys csv file"),
     { NULL }
 };
 
