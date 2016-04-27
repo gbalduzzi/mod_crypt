@@ -11,8 +11,10 @@
 #include <string.h>
 #include <ctype.h>
 
+/* Declare some global variables */
 bool debug = true;
 const char *rootPath;
+const char *aclFilePath;
 
 static int crypt_handler(request_rec *r)
 {
@@ -45,13 +47,6 @@ static int crypt_handler(request_rec *r)
      const char *user_id = apr_table_get(GET, "user");
      if (!user_id) user_id = "-1";
 
-    /* Build the command to AES crypt the requested file */
-    char *command;
-    size_t sz;
-    sz = snprintf(NULL, 0, "openssl aes-256-cbc -a -salt -in %s -pass pass:0123456789", r->filename);
-    command = (char *)malloc(sz++); /* make sure you check for != NULL in real code */
-    snprintf(command, sz, "openssl aes-256-cbc -a -salt -in %s -pass pass:0123456789", r->filename);
-
     if (debug) {
         ap_set_content_type(r, "text/plain");
         ap_rprintf(r, "Your user was: %s\n", user_id);
@@ -63,7 +58,7 @@ static int crypt_handler(request_rec *r)
 
     /* Open ACL file */
 
-    FILE* stream = fopen("/srv/http/cryptoApache/acl.csv", "r");
+    FILE* stream = fopen(aclFilePath, "r");
     char line[1024];
     int count = 0;
     bool auth = false;
@@ -100,10 +95,21 @@ static int crypt_handler(request_rec *r)
 
     /* Send 403 if not authorised */
     if (!auth) {
-        return HTTP_FORBIDDEN;
+        if (!debug) {
+            return HTTP_FORBIDDEN;
+        } else {
+            ap_rprintf(r, "ACCESS FORBIDDEN\n");
+        }
     }
 
     /* Otherwise send crypted data */
+
+    /* Build the command to AES crypt the requested file */
+    char *command;
+    size_t sz;
+    sz = snprintf(NULL, 0, "openssl aes-256-cbc -a -salt -in %s -pass pass:0123456789", r->filename);
+    command = (char *)malloc(sz++); /* make sure you check for != NULL in real code */
+    snprintf(command, sz, "openssl aes-256-cbc -a -salt -in %s -pass pass:0123456789", r->filename);
 
     FILE *fp;
     char path[1035];
@@ -127,6 +133,7 @@ static int crypt_handler(request_rec *r)
 static void register_hooks(apr_pool_t *pool)
 {
     rootPath = "/";
+    aclFilePath = "acl.csv";
     /* Create a hook in the request handler, so we get called when a request arrives */
     ap_hook_handler(crypt_handler, NULL, NULL, APR_HOOK_LAST);
 }
@@ -138,9 +145,17 @@ const char *set_request_root(cmd_parms *cmd, void *cfg, const char *arg)
     return NULL;
 }
 
+/* Handler for the "aclFIle" directive */
+const char *set_acl_file_path(cmd_parms *cmd, void *cfg, const char *arg)
+{
+    aclFilePath = arg;
+    return NULL;
+}
+
 static const command_rec  crypt_directives[] =
 {
     AP_INIT_TAKE1("CryptRootPath", set_request_root, NULL, RSRC_CONF, "Set the root of our crypted folder"),
+    AP_INIT_TAKE1("CryptAclFile", set_acl_file_path, NULL, RSRC_CONF, "Set the location of ACL csv file"),
     { NULL }
 };
 
