@@ -1,6 +1,7 @@
 #include "httpd.h"
 #include "http_config.h"
 #include "http_protocol.h"
+#include "mod_proxy.h"
 #include "ap_config.h"
 #include "apr_strings.h"
 #include "util_script.h"
@@ -53,7 +54,6 @@ static int crypt_handler(request_rec *r)
     } else {
         ap_set_content_type(r, "application/octet-stream");
     }
-
 
     /* Open ACL file */
     FILE* aclStream = fopen(aclFilePath, "r");

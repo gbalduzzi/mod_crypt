@@ -1,0 +1,3 @@
+path;users_allowed; # First line is header and is not parsed
+secretFile.txt;John,Giorgio;
+superSecretFile.txt;Giorgio;
