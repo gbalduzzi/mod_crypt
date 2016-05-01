@@ -1,7 +1,7 @@
 # mod_crypt
 Apache module that provides per-user file encryption
 
-In the directories it is enabled, Apache will return an AES-encrypted copy of the requested files, using a user-specific key
+In the directories this module is enabled, Apache will return an AES-encrypted copy of the requested files, using a user-specific key
 
 The user authentication is a simple `?user=user_id` querystring: you are allowed to act as a different user because without the proper key you can't read the data anyway
 
@@ -30,7 +30,7 @@ As you can see in the `acl.csv.example`, the row format is the following:
 file_path;list,user,allowed;
 ```
 
-The first row is the header and will not be processed, so a super-minimal acl.csv should look like this:
+The first row is the header and it will not be processed, so a super-minimal acl.csv should look like this:
 ```
 path;users_allowed;
 secretFile.txt;John,Giorgio;
@@ -63,7 +63,7 @@ just by adding `CryptRootPath /home/user/www/foler/` to your apache .conf
 If not specified, the default is `/`
 
 
-`CryptAclFile` just provide the path of Acl file. Default is `CryptRootPath/acl.csv`
+`CryptAclFile` just provides the path of Acl file. Default is `CryptRootPath/acl.csv`
 
 ### KEY file
 
