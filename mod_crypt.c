@@ -11,12 +11,50 @@
 #include <stdbool.h>
 #include <string.h>
 #include <ctype.h>
+#include <openssl/evp.h>
+#include <openssl/aes.h>
 
 /* Declare some global variables */
-bool debug = true;
+bool debug = FALSE;
 const char *rootPath;
 const char *aclFilePath;
 const char *keysFilePath;
+
+/* function that given an input file and a key performs AES encryption and send cipher data as response */
+void AES_crypt(request_rec *r,int should_encrypt, FILE *ifp, unsigned char *ckey, unsigned char *ivec) {
+    const unsigned BUFSIZE=4096;
+    unsigned char *read_buf = malloc(BUFSIZE);
+    unsigned char *cipher_buf;
+    unsigned blocksize;
+    int out_len;
+    EVP_CIPHER_CTX ctx;
+
+    EVP_CipherInit(&ctx, EVP_aes_256_cbc(), ckey, ivec, should_encrypt);
+    blocksize = EVP_CIPHER_CTX_block_size(&ctx);
+    cipher_buf = malloc(BUFSIZE + blocksize);
+    while (1) {
+
+        // Read in data in blocks until EOF. Update the ciphering with each read.
+
+        int numRead = fread(read_buf, sizeof(unsigned char), BUFSIZE, ifp);
+        EVP_CipherUpdate(&ctx, cipher_buf, &out_len, read_buf, numRead);
+        ap_rprintf(r,"%s", cipher_buf);
+        if (numRead < BUFSIZE) { // EOF
+            break;
+        }
+    }
+
+    // Now cipher the final block and write it out.
+
+    EVP_CipherFinal(&ctx, cipher_buf, &out_len);
+    ap_rprintf(r,"%s", cipher_buf);
+
+    // Free memory
+
+    free(cipher_buf);
+    free(read_buf);
+}
+
 
 static int crypt_handler(request_rec *r)
 {
@@ -96,53 +134,20 @@ static int crypt_handler(request_rec *r)
         return HTTP_FORBIDDEN;
     }
 
-    /* Otherwise send crypted data */
+    // Send crypted data
 
-    /* Get user personal key from keys.csv */
-    FILE* streamKeys = fopen(keysFilePath, "r");
-    char lineKeys[1024];
-    char *userKey = "";
-    count = 0;
-    while (fgets(lineKeys, 1024, streamKeys))
-    {
-        if (count++ == 0) {
-            /* First row is csv header */
-            continue;
-        }
+    // Generate Keys (TODO)
+    unsigned char ckey[] = "thiskeyisverybadthiskeyisverybad";
+    unsigned char ivec[] = "dontusethisinputdontusethisinput";
 
-       const char* field = strtok(lineKeys,";");
-       if (strcmp(field, user_id) == 0) {
-           /* I found the correct key for my user */
-            field = strtok(NULL, ";");
-            userKey = strdup(field);
-       }
-    }
+    // Crypt and send to the user
+    FILE *fin = fopen(r->filename, "rb");
+    AES_crypt(r, TRUE, fin, ckey, ivec);
+    fclose(fin);
 
-    if (strcmp("",userKey) == 0) {
-        /* User not in the list */
-        return HTTP_FORBIDDEN;
-    }
-
-    /* Build the command to AES crypt the requested file */
-    char *command;
-    size_t sz;
-    sz = snprintf(NULL, 0, "openssl aes-256-cbc -a -salt -in %s -pass pass:%s", r->filename, userKey);
-    command = (char *)malloc(sz++); /* make sure you check for != NULL in real code */
-    snprintf(command, sz, "openssl aes-256-cbc -a -salt -in %s -pass pass:%s", r->filename, userKey);
-    ap_rprintf(r, "Command: %s \n", command);
-
-    FILE *fp;
-    char path[1035];
-
-    /* Open the command for reading. */
-    fp = popen(command, "r");
-    /* Read the output a line at a time - output it. */
-    while (fgets(path, sizeof(path)-1, fp) != NULL) {
-        ap_rprintf(r, "%s", path);
-    }
-
-    /* close */
-    pclose(fp);
+    // Send Key and IV as responde headers
+    apr_table_setn(r->headers_out,"aes_key",ckey);
+    apr_table_setn(r->headers_out,"iv",ivec);
 
     /* Lastly, we must tell the server that we took care of this request and everything went fine.
      * We do so by simply returning the value OK to the server.
