@@ -13,6 +13,11 @@
 #include <ctype.h>
 #include <openssl/evp.h>
 #include <openssl/aes.h>
+#include <openssl/rand.h>
+#include <openssl/objects.h>
+#include <openssl/pem.h>
+#include <openssl/ssl.h>
+#include <openssl/rsa.h>
 
 /* Declare some global variables */
 bool debug = FALSE;
@@ -20,8 +25,36 @@ const char *rootPath;
 const char *aclFilePath;
 const char *keysFilePath;
 
-/* function that given an input file and a key performs AES encryption and send cipher data as response */
-void AES_crypt(request_rec *r,int should_encrypt, FILE *ifp, unsigned char *ckey, unsigned char *ivec) {
+/* Function for base64 encoding using Openssl */
+char *base64encode (const void *b64_encode_this, int encode_this_many_bytes){
+    BIO *b64_bio, *mem_bio;      //Declares two OpenSSL BIOs: a base64 filter and a memory BIO.
+    BUF_MEM *mem_bio_mem_ptr;    //Pointer to a "memory BIO" structure holding our base64 data.
+    b64_bio = BIO_new(BIO_f_base64());                      //Initialize our base64 filter BIO.
+    mem_bio = BIO_new(BIO_s_mem());                           //Initialize our memory sink BIO.
+    BIO_push(b64_bio, mem_bio);            //Link the BIOs by creating a filter-sink BIO chain.
+    BIO_set_flags(b64_bio, BIO_FLAGS_BASE64_NO_NL);  //No newlines every 64 characters or less.
+    BIO_write(b64_bio, b64_encode_this, encode_this_many_bytes); //Records base64 encoded data.
+    BIO_flush(b64_bio);   //Flush data.  Necessary for b64 encoding, because of pad characters.
+    BIO_get_mem_ptr(mem_bio, &mem_bio_mem_ptr);  //Store address of mem_bio's memory structure.
+    BIO_set_close(mem_bio, BIO_NOCLOSE);   //Permit access to mem_ptr after BIOs are destroyed.
+    BIO_free_all(b64_bio);  //Destroys all BIOs in chain, starting with b64 (i.e. the 1st one).
+    BUF_MEM_grow(mem_bio_mem_ptr, (*mem_bio_mem_ptr).length + 1);   //Makes space for end null.
+    (*mem_bio_mem_ptr).data[(*mem_bio_mem_ptr).length] = '\0';  //Adds null-terminator to tail.
+    return (*mem_bio_mem_ptr).data; //Returns base-64 encoded data. (See: "buf_mem_st" struct).
+}
+
+
+/**
+  Function to encrypt ifp
+  *r : Apache request object used to output encrypted file to the user
+  **pub_key : First elements is public RSA key used to encrypt generated AES key
+  *ifp : File object that must be encrypted and sent to user
+  **key : At position 0 will be stored encrypted AES key
+  *ekl : At position 0 will be stored key[0] length
+  *ivec: In this string will be stored the random generated ivec (not encrypted)
+ */
+void rsa_encrypt(request_rec *r,EVP_PKEY **pub_key, FILE *ifp, unsigned char **key, int *ekl, unsigned char *ivec) {
+    //Initialize variables
     const unsigned BUFSIZE=4096;
     unsigned char *read_buf = malloc(BUFSIZE);
     unsigned char *cipher_buf;
@@ -29,30 +62,31 @@ void AES_crypt(request_rec *r,int should_encrypt, FILE *ifp, unsigned char *ckey
     int out_len;
     EVP_CIPHER_CTX ctx;
 
-    EVP_CipherInit(&ctx, EVP_aes_256_cbc(), ckey, ivec, should_encrypt);
+    //Initialize ctx to perform AES cbc 256 bit, generating random key and ivec
+    EVP_SealInit(&ctx, EVP_aes_256_cbc(), key,ekl, ivec, pub_key,1);
+
+    //Alloc memory for cipher_buf buffer
     blocksize = EVP_CIPHER_CTX_block_size(&ctx);
     cipher_buf = malloc(BUFSIZE + blocksize);
+
     while (1) {
-
-        // Read in data in blocks until EOF. Update the ciphering with each read.
-
+        // Read in data in blocks until EOF
         int numRead = fread(read_buf, sizeof(unsigned char), BUFSIZE, ifp);
-        EVP_CipherUpdate(&ctx, cipher_buf, &out_len, read_buf, numRead);
+        EVP_SealUpdate(&ctx, cipher_buf, &out_len, read_buf, numRead);
         ap_rprintf(r,"%s", cipher_buf);
         if (numRead < BUFSIZE) { // EOF
             break;
         }
     }
 
-    // Now cipher the final block and write it out.
-
-    EVP_CipherFinal(&ctx, cipher_buf, &out_len);
+    // Now cipher the final block and write it out, closing encryption process
+    EVP_SealFinal(&ctx, cipher_buf, &out_len);
     ap_rprintf(r,"%s", cipher_buf);
 
     // Free memory
-
     free(cipher_buf);
     free(read_buf);
+
 }
 
 
@@ -87,18 +121,14 @@ static int crypt_handler(request_rec *r)
      const char *user_id = apr_table_get(GET, "user");
      if (!user_id) user_id = "-1";
 
-    if (debug) {
-        ap_set_content_type(r, "text/plain");
-    } else {
-        ap_set_content_type(r, "application/octet-stream");
-    }
+    ap_set_content_type(r, "application/octet-stream");
 
     /* Open ACL file */
     FILE* aclStream = fopen(aclFilePath, "r");
-    char lineAcl[1024];
+    char lineAcl[4096];
     int count = 0;
     bool auth = false;
-    while (fgets(lineAcl, 1024, aclStream))
+    while (fgets(lineAcl, 4096, aclStream))
     {
         if (count++ == 0) {
             /* First row is csv header */
@@ -134,20 +164,42 @@ static int crypt_handler(request_rec *r)
         return HTTP_FORBIDDEN;
     }
 
-    // Send crypted data
-
-    // Generate Keys (TODO)
-    unsigned char ckey[] = "thiskeyisverybadthiskeyisverybad";
-    unsigned char ivec[] = "dontusethisinputdontusethisinput";
-
-    // Crypt and send to the user
+    /* Initialize encryption */
+    unsigned char **key = (unsigned char **)malloc(sizeof(unsigned char *) * 1);
+    unsigned char iv[16];
     FILE *fin = fopen(r->filename, "rb");
-    AES_crypt(r, TRUE, fin, ckey, ivec);
-    fclose(fin);
+    int *ekl = (int *)malloc(sizeof(int));
+
+    //Get public file
+    char PublicKeyFile[1024];
+    strncpy(PublicKeyFile,keysFilePath,sizeof(PublicKeyFile));
+    strcat(PublicKeyFile,user_id);
+    strcat(PublicKeyFile,".pem");
+
+    apr_table_set(r->headers_out,"Test",PublicKeyFile);
+
+    //Get rsa public key of user
+    FILE *rsaPublic = fopen(PublicKeyFile,"rb");
+    if (rsaPublic == NULL) {
+        return HTTP_FORBIDDEN;
+    }
+    RSA* pubkey = RSA_new();
+    pubkey = PEM_read_RSA_PUBKEY(rsaPublic,&pubkey,NULL,NULL);
+    EVP_PKEY **pubk = (EVP_PKEY **)malloc(sizeof(EVP_PKEY *) * 1);
+    pubk[0] = EVP_PKEY_new();
+    EVP_PKEY_set1_RSA(pubk[0], pubkey);
+    key[0] = (unsigned char *)malloc(EVP_PKEY_size(pubk[0]));
+
+    //Encrypt file
+    rsa_encrypt(r, pubk, fin, key,ekl, iv);
+
+    //Base64 Encode Key and Iv
+    char *b64Key = base64encode(key[0], ekl[0]);
+    char *b64Iv = base64encode(iv, 16);
 
     // Send Key and IV as responde headers
-    apr_table_setn(r->headers_out,"aes_key",ckey);
-    apr_table_setn(r->headers_out,"iv",ivec);
+    apr_table_set(r->headers_out,"Aes-Key",b64Key);
+    apr_table_set(r->headers_out,"Iv",b64Iv);
 
     /* Lastly, we must tell the server that we took care of this request and everything went fine.
      * We do so by simply returning the value OK to the server.
@@ -159,7 +211,7 @@ static void register_hooks(apr_pool_t *pool)
 {
     rootPath = "/";
     aclFilePath = "acl.csv";
-    keysFilePath = "keys.csv";
+    keysFilePath = "keys";
     /* Create a hook in the request handler, so we get called when a request arrives */
     ap_hook_handler(crypt_handler, NULL, NULL, APR_HOOK_LAST);
 }
@@ -189,7 +241,7 @@ static const command_rec  crypt_directives[] =
 {
     AP_INIT_TAKE1("CryptRootPath", set_request_root, NULL, RSRC_CONF, "Set the root of our crypted folder"),
     AP_INIT_TAKE1("CryptAclFile", set_acl_file_path, NULL, RSRC_CONF, "Set the location of ACL csv file"),
-    AP_INIT_TAKE1("CryptKeysFile", set_keys_file_path, NULL, RSRC_CONF, "Set the location of Keys csv file"),
+    AP_INIT_TAKE1("CryptKeysRoot", set_keys_file_path, NULL, RSRC_CONF, "Set the directory location of Public keys"),
     { NULL }
 };
 
