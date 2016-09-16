@@ -1,9 +1,14 @@
 # mod_crypt
-Apache module that provides per-user file encryption
 
-In the directories this module is enabled, Apache will return an AES-encrypted copy of the requested files, using a user-specific key
+THIS IS A **PROOF-OF-CONCEPT** project i made for my graduation thesis at the third year.
 
-The user authentication is a simple `?user=user_id` querystring: you are allowed to act as a different user because without the proper key you can't read the data anyway
+If you are interested in the project, [you can read the thesis clicking here](https://drive.google.com/file/d/0B-KyKgTmIXNAZW93eTFDNDViOVE/view?usp=sharing). Feel free to contact me in case you have somethink to say about it.
+
+`mod_crypt` is an apache module that provides per-user file encryption
+
+In the directories this module is enabled, Apache will return an encrypted copy of the requested files, using a user-specific key.
+
+The user authentication is a simple `?user=user_id` querystring on the request: there is no need of passwords or private tokens here, the layer of security is provided by the encryption itself.
 
 Note that encrypted file will be returned with an `application/octet-stream` mimetype
 
@@ -12,7 +17,7 @@ This is created and tested only for GNU/Linux systems. You also need to have Apa
 
 Clone this repository (or download it), enter the directory and compile mod_crypt.c by running:
 ```
-sudo apxs -i -a -c -n crypt mod_crypt.c
+# apxs -i -a -c -n crypt mod_crypt.c -lcrypto
 ```
 
 Cool! the module now should be up and running, but you are not done yet.
@@ -37,34 +42,25 @@ secretFile.txt;John,Giorgio;
 superSecretFile.txt;Giorgio;
 ```
 
-Given this ACL, `../secretFile.txt?user=John` will return the secretFile.txt encrpyted with John key, while `../superSecretFile.txt?user=John` will return a 403
+Given this ACL, `../secretFile.txt?user=John` will return the secretFile.txt encrpyted for John, while `../superSecretFile.txt?user=John` will return a 403 error.
 
 There are two Apache directives that provides a better acl customisation, just include them in your apache config file:
 ```
-CryptRootPath /path/to/root/directory/
-CryptAclFile /path/to/root/directory/acl.csv
+CryptRootPath /path/to/your/directory/
+CryptAclFile /path/to/your/directory/acl.csv
 ```
 
-`CryptRootPath` provides the root path of files in your acl, so that your acl.csv can go from
-
-```
-home/user/www/foler/secretFile.txt;John,Giorgio;
-home/user/www/foler/superSecretFile.txt;Giorgio;
-```
-
-to
-```
-secretFile.txt;John,Giorgio;
-superSecretFile.txt;Giorgio;
-```
-
-just by adding `CryptRootPath /home/user/www/foler/` to your apache .conf
+`CryptRootPath` provides the root path of files in your acl, so you don't need to specify it everytime in your `acl.csv`
 
 If not specified, the default is `/`
 
 
-`CryptAclFile` just provides the path of Acl file. Default is `CryptRootPath/acl.csv`
+`CryptAclFile` just provides the path of Acl file. Default is `CryptRootPath/acl.csv`. Remember that http user will need read access to those files
 
-### KEY file
+### KEY files
+Every user need to provide his public `.pem` RSA key to the server. `mod_crypt` will use the .pem file with the requesting user as filename, searching into a specific directory.
 
-TODO: probably will change in the last commits after RSA key encryption
+The directory can be set in the apache configuration file as well:
+```
+CryptKeysRoot /path/to/keys
+```
