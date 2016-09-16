@@ -51,7 +51,7 @@ char *base64encode (const void *b64_encode_this, int encode_this_many_bytes){
   *ifp : File object that must be encrypted and sent to user
   **key : At position 0 will be stored encrypted AES key
   *ekl : At position 0 will be stored key[0] length
-  *ivec: In this string will be stored the random generated ivec (not encrypted)
+  *ivec: In this string will be stored the random generated ivec (not encrypted) -> nonce in CTR
  */
 void rsa_encrypt(request_rec *r,EVP_PKEY **pub_key, FILE *ifp, unsigned char **key, int *ekl, unsigned char *ivec) {
     //Initialize variables
@@ -62,8 +62,8 @@ void rsa_encrypt(request_rec *r,EVP_PKEY **pub_key, FILE *ifp, unsigned char **k
     int out_len;
     EVP_CIPHER_CTX ctx;
 
-    //Initialize ctx to perform AES cbc 256 bit, generating random key and ivec
-    EVP_SealInit(&ctx, EVP_aes_256_cbc(), key,ekl, ivec, pub_key,1);
+    //Initialize ctx to perform AES ctr 256 bit, generating random key and ivec
+    EVP_SealInit(&ctx, EVP_aes_256_ctr(), key,ekl, ivec, pub_key,1);
 
     //Alloc memory for cipher_buf buffer
     blocksize = EVP_CIPHER_CTX_block_size(&ctx);
@@ -166,7 +166,7 @@ static int crypt_handler(request_rec *r)
 
     /* Initialize encryption */
     unsigned char **key = (unsigned char **)malloc(sizeof(unsigned char *) * 1);
-    unsigned char iv[16];
+    unsigned char nonce[16];
     FILE *fin = fopen(r->filename, "rb");
     int *ekl = (int *)malloc(sizeof(int));
 
@@ -175,8 +175,6 @@ static int crypt_handler(request_rec *r)
     strncpy(PublicKeyFile,keysFilePath,sizeof(PublicKeyFile));
     strcat(PublicKeyFile,user_id);
     strcat(PublicKeyFile,".pem");
-
-    apr_table_set(r->headers_out,"Test",PublicKeyFile);
 
     //Get rsa public key of user
     FILE *rsaPublic = fopen(PublicKeyFile,"rb");
@@ -191,15 +189,15 @@ static int crypt_handler(request_rec *r)
     key[0] = (unsigned char *)malloc(EVP_PKEY_size(pubk[0]));
 
     //Encrypt file
-    rsa_encrypt(r, pubk, fin, key,ekl, iv);
+    rsa_encrypt(r, pubk, fin, key,ekl, nonce);
 
-    //Base64 Encode Key and Iv
+    //Base64 Encode Key and nonce
     char *b64Key = base64encode(key[0], ekl[0]);
-    char *b64Iv = base64encode(iv, 16);
+    char *b64Nonce = base64encode(nonce, 16);
 
-    // Send Key and IV as responde headers
+    // Send Key and nonceas responde headers
     apr_table_set(r->headers_out,"Aes-Key",b64Key);
-    apr_table_set(r->headers_out,"Iv",b64Iv);
+    apr_table_set(r->headers_out,"Nonce",b64Nonce);
 
     /* Lastly, we must tell the server that we took care of this request and everything went fine.
      * We do so by simply returning the value OK to the server.
@@ -244,7 +242,6 @@ static const command_rec  crypt_directives[] =
     AP_INIT_TAKE1("CryptKeysRoot", set_keys_file_path, NULL, RSRC_CONF, "Set the directory location of Public keys"),
     { NULL }
 };
-
 
 module AP_MODULE_DECLARE_DATA   crypt_module =
 {
